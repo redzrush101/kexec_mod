@@ -137,7 +137,7 @@ void kexec_mod_machine_cleanup(struct kexec_mod_image *image)
  *
  * This function does not return on success.
  */
-void kexec_mod_machine_kexec(struct kexec_mod_image *image)
+void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mod_image *image)
 {
     phys_addr_t code_phys;
     phys_addr_t page_table_phys;
