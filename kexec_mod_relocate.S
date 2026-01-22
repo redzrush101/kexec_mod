@@ -67,30 +67,31 @@ SYM_CODE_START(kexec_mod_relocate_new_kernel)
     
     /* 
      * Block Descriptor Attributes (0x701):
-     * AF=1 (bit 10), SH=OuterShareable(2) (bits 9:8=10), AP=RW(0)(bits 7:6=00).. wait AP
-     * AP[1] = 0 (RW), AP[0] needs to be ?
-     * AP=00 (RW EL1).
-     * 0x701:
-     * [11:10] = 01 (AF=0, ?) No.
-     * AF is bit 10.
-     * 0x401 = AF=1.
-     * 0x701 -> 0111 0000 0001
-     * [10] = 1 (AF)
+     * [10] = 1 (AF=1, Access Flag)
      * [9:8] = 11 (SH=3 Inner Shareable)
      * [7:6] = 00 (AP=00 RW EL1)
-     * [5] = 0
-     * [4:2] = 000 (Idx 0)
-     * [1:0] = 01 (Block)
-     * So 0x701 = AF=1, SH=3(IS), AP=RW, Idx=0.
+     * [4:2] = 000 (Idx 0 for MAIR)
+     * [1:0] = 01 (Block descriptor)
      */
-    mov     x1, #0x00000000
     mov     x2, #0x701
-    orr     x1, x1, x2
-    str     x1, [x0, #0]        /* Index 0: 0-1GB */
-    
-    mov     x1, #0x40000000
-    orr     x1, x1, x2
-    str     x1, [x0, #8]        /* Index 1: 1GB-2GB */
+
+    /*
+     * Create identity map for ALL 64 entries (64GB of physical address space)
+     * This ensures our code page at any physical address is covered.
+     * Each entry maps 1GB (with 39-bit VA, L1 table with 4KB granule).
+     * Entry[n] = (n * 1GB) | 0x701
+     */
+    mov     x3, #0              /* Starting physical address = 0 */
+    mov     x4, #64             /* 64 entries = 64GB (512 would overflow table) */
+    mov     x5, x0              /* x5 = current table entry pointer */
+    mov     x6, #0x40000000     /* x6 = 1GB increment */
+
+.Lfill_table:
+    orr     x1, x3, x2          /* PA | attributes */
+    str     x1, [x5], #8        /* Store and advance */
+    add     x3, x3, x6          /* Next 1GB (x6 holds 0x40000000) */
+    subs    x4, x4, #1
+    b.gt    .Lfill_table
 
     dsb     sy
 

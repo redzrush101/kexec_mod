@@ -61,35 +61,60 @@ struct blocking_notifier_head *kexec_sym_reboot_notifier_list = NULL;
  * Symbol Resolution - Best Effort
  * ============================================================ */
 
-/**
- * kexec_mod_resolve_symbols - Try to resolve symbols, use fallbacks
- *
- * This version doesn't fail if symbols can't be resolved,
- * it just uses fallback implementations where possible.
- */
-int kexec_mod_resolve_symbols(void)
+/* ============================================================
+ * Symbol Resolution - KPROBE lookup for kallsyms
+ * ============================================================ */
+#include <linux/kprobes.h>
+
+static unsigned long lookup_name(const char *name)
 {
-    kexec_mod_info("Using fallback implementations for unexported symbols\n");
+    struct kprobe kp = {
+        .symbol_name = name,
+    };
+    unsigned long addr;
+
+    if (register_kprobe(&kp) < 0) {
+        return 0;
+    }
+    addr = (unsigned long)kp.addr;
+    unregister_kprobe(&kp);
     
-    /* 
-     * __flush_dcache_area - use our fallback implementation
-     * Already set as default above
-     */
-    kexec_mod_info("  __flush_dcache_area: using inline assembly fallback\n");
+    return addr;
+}
+
+int __attribute__((no_sanitize("cfi"))) kexec_mod_resolve_symbols(void)
+{
+    unsigned long (*kallsyms_lookup_name_ptr)(const char *name) = NULL;
+
+    kexec_mod_info("Resolving symbols...\n");
+
+    /* 1. Try to find kallsyms_lookup_name via kprobe */
+    kallsyms_lookup_name_ptr = (void *)lookup_name("kallsyms_lookup_name");
     
-    /*
-     * device_shutdown / syscore_shutdown - these are optional
-     * If not available, we skip them during the shutdown sequence
-     */
-    kexec_mod_info("  device_shutdown: will skip (not critical)\n");
-    kexec_mod_info("  syscore_shutdown: will skip (not critical)\n");
-    
-    /*
-     * reboot_notifier_list - optional notification
-     */
-    kexec_mod_info("  reboot_notifier_list: will skip (not critical)\n");
-    
-    kexec_mod_info("Symbol resolution complete (using fallbacks)\n");
+    if (!kallsyms_lookup_name_ptr) {
+        kexec_mod_err("Failed to lookup kallsyms_lookup_name. Cannot resolve symbols!\n");
+        return -EFAULT;
+    }
+    kexec_mod_info("Found kallsyms_lookup_name at 0x%px\n", kallsyms_lookup_name_ptr);
+
+    /* 2. Resolve required symbols */
+    kexec_sym_device_shutdown = (void *)kallsyms_lookup_name_ptr("device_shutdown");
+    if (kexec_sym_device_shutdown) 
+        kexec_mod_info("  Bound device_shutdown\n");
+    else 
+        kexec_mod_info("  Failed to bind device_shutdown (RISKY)\n");
+
+    kexec_sym_syscore_shutdown = (void *)kallsyms_lookup_name_ptr("syscore_shutdown");
+    if (kexec_sym_syscore_shutdown)
+        kexec_mod_info("  Bound syscore_shutdown\n");
+
+    kexec_sym_reboot_notifier_list = (void *)kallsyms_lookup_name_ptr("reboot_notifier_list");
+    if (kexec_sym_reboot_notifier_list)
+        kexec_mod_info("  Bound reboot_notifier_list\n");
+
+    /* Always use fallback for dcache flush to avoid CFI issues */
+    kexec_mod_info("  Using fallback __flush_dcache_area (CFI safe)\n");
+
     return 0;
 }
 

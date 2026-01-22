@@ -38,6 +38,11 @@ static dev_t kexec_mod_dev;
 static struct cdev kexec_mod_cdev;
 static struct class *kexec_mod_class;
 
+/* Module parameters */
+static int shutdown = 0;
+module_param(shutdown, int, 0644);
+MODULE_PARM_DESC(shutdown, "Perform device_shutdown() call (1=exec, 0=skip (default))");
+
 /* ============================================================
  * IOCTL Handlers
  * ============================================================ */
@@ -168,7 +173,7 @@ out_free_segments:
  *
  * Returns: Does not return on success
  */
-static long kexec_mod_ioctl_exec(void)
+static long __attribute__((no_sanitize("cfi"))) kexec_mod_ioctl_exec(void)
 {
     int ret;
 
@@ -184,6 +189,18 @@ static long kexec_mod_ioctl_exec(void)
     if (ret) {
         kexec_mod_err("Failed to shutdown secondary CPUs\n");
         return ret;
+    }
+
+    /* Shutdown devices to stop DMA */
+    if (!shutdown) {
+        kexec_mod_info("Skipping device shutdown (default behavior)\n");
+    } else {
+        kexec_mod_info("Shutting down devices (requested by user)\n");
+        if (kexec_sym_device_shutdown) {
+            kexec_sym_device_shutdown();
+        } else {
+            kexec_mod_warn("device_shutdown symbol not found - DMA corruption possible!\n");
+        }
     }
 
     /* Mask all interrupts */

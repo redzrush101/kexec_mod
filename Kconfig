@@ -1,0 +1,11 @@
+config KEXEC_MOD
+	tristate "Kexec Module"
+	default m
+	help
+	  This module allows kexec functionality to be loaded as a module.
+	  It is useful for systems where kexec support is needed but
+	  cannot be built into the kernel core or when a kernel reinstall
+	  is not possible.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called kexec_mod.

@@ -151,16 +151,18 @@ void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mo
                         unsigned long);
 
     /* Calculate code size */
+    /* Calculate code size */
     code_size = (unsigned long)kexec_mod_relocate_new_kernel_end - 
                 (unsigned long)kexec_mod_relocate_new_kernel;
                 
-    kexec_mod_info("Starting kexec transition\n");
+    kexec_mod_info("Starting kexec transition [Point A]\n");
     kexec_mod_info("Relocation code size: %lu bytes\n", code_size);
     kexec_mod_image_info(image);
 
     /* 
      * 1. Allocate Page Table Page (Identity Map)
      */
+    kexec_mod_info("[Point B] Allocating page table\n");
     pt_page = alloc_page(GFP_KERNEL | __GFP_ZERO);
     if (!pt_page) {
         kexec_mod_err("Failed to allocate page table\n");
@@ -170,10 +172,8 @@ void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mo
     
     /* 
      * 2. Allocate Code Page (Relocation Stub destination)
-     * We need physically contiguous memory for the code to run after MMU disable.
-     * vmalloc/module text is not contiguous.
-     * Ensure we allocate enough pages if code > 4KB (unlikely but safe).
      */
+    kexec_mod_info("[Point C] Allocating code page\n");
     code_page = alloc_pages(GFP_KERNEL, get_order(code_size));
     if (!code_page) {
         kexec_mod_err("Failed to allocate code page\n");
@@ -187,24 +187,51 @@ void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mo
     kexec_mod_info("Code page: virt=%px, phys=0x%llx\n", code_virt, code_phys);
 
     /* 3. Copy relocation code to the contiguous page */
+    kexec_mod_info("[Point D] Copying relocation code to %px...\n", code_virt);
     memcpy(code_virt, kexec_mod_relocate_new_kernel, code_size);
     
     /* Flush caches for the code copy */
+    kexec_mod_info("[Point E] Flushing dcache...\n");
     kexec_sym___flush_dcache_area(code_virt, code_size);
-    __flush_icache_range((unsigned long)code_virt, 
-                         (unsigned long)code_virt + code_size);
+    
+    kexec_mod_info("[Point F] Flushing icache...\n");
+    kexec_mod_info("[Point F1] code_virt=%px, code_size=%lu\n", code_virt, code_size);
+    
+    /*
+     * IMPORTANT: flush_icache_range may send IPIs to other CPUs.
+     * This MUST be called BEFORE SMP shutdown or use local-only cache ops.
+     * Since we're called after SMP shutdown, use local invalidation only.
+     */
+    kexec_mod_info("[Point F2] Using local cache invalidation (no IPI)...\n");
+    
+    /* Use __flush_dcache_area which is local-only */
+    kexec_sym___flush_dcache_area(code_virt, code_size);
+    
+    /* Synchronization barriers */
+    dsb(sy);
+    
+    /* Invalidate I-cache locally - this should work after SMP stop */
+    asm volatile("ic iallu\n" "dsb sy\n" "isb\n" ::: "memory");
+    
+    kexec_mod_info("[Point F3] Local cache flush done\n");
+    
+    kexec_mod_info("[Point G] Cache flush complete.\n");
 
     kexec_mod_image_info(image);
 
     /* Flush the relocation list and source pages */
+    kexec_mod_info("[Point H] Flushing list...\n");
     kexec_mod_list_flush(image);
-    if (image->head & IND_DONE)
+    if (image->head & IND_DONE) {
+        kexec_mod_info("[Point I] Flushing segments...\n");
         kexec_mod_segment_flush(image);
+    }
 
     /* Disable interrupts */
+    kexec_mod_info("[Point J] Masking interrupts...\n");
     local_daif_mask();
 
-    kexec_mod_info("Bye! Jumping to relocation code...\n");
+    kexec_mod_info("[Point K] Bye! Jumping to relocation code...\n");
 
     /*
      * Call the LOCAL relocation function (in module text).
@@ -217,6 +244,7 @@ void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mo
                             unsigned long))
                   kexec_mod_relocate_new_kernel;
     
+    kexec_mod_info("[Point L] Calling relocate_fn at %px...\n", relocate_fn);
     relocate_fn(0,                  /* el2_switch = 0 */
                 code_phys,          /* physical addr of code COPY */
                 image->head,        /* relocation list */
@@ -226,7 +254,7 @@ void __attribute__((no_sanitize("cfi"))) kexec_mod_machine_kexec(struct kexec_mo
                 (unsigned long)page_address(pt_page)); /* page table virtual address */
 
     /* Should never reach here */
-    kexec_mod_err("Relocation returned unexpectedly!\n");
+    kexec_mod_err("[Point M] Relocation returned unexpectedly!\n");
     unreachable();
 }
 
